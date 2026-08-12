@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# MoneyWise AI pre-commit guard — blocks signing secrets from ever being committed.
+#
+# Enable it once (from the repo root):
+#   git config core.hooksPath .githooks
+#   chmod +x .githooks/pre-commit
+#
+# It refuses any commit that stages a keystore, signing.properties,
+# .p12/.p8/.mobileprovision, or other signing material.
+
+set -u
+
+# Match full paths that end in a blocked file name.
+# Anchored at the start or after a "/", and anchored at the end.
+BLOCKED='(^|/)(signing\.properties|[^/]*\.(jks|keystore|p12|p8|mobileprovision))$'
+
+bad=0
+
+# Scan every staged path.
+while IFS= read -r f; do
+  if printf '%s' "$f" | grep -Eq "$BLOCKED"; then
+    echo "BLOCKED: '$f' is a signing secret and must never be committed." >&2
+    bad=1
+  fi
+done < <(git diff --cached --name-only)
+
+# Also scan even if files were force-added.
+if [ "$bad" -eq 1 ]; then
+  echo "Remove the file(s) from the index (git rm --cached <file>) and try again." >&2
+  echo "Re-check whether your .gitignore and stored secrets are correct." >&2
+  exit 1
+fi
+
+exit 0
