@@ -1,0 +1,129 @@
+# MoneyWise AI — build & deploy pipeline
+#
+# On every push to `main` (and on pull requests):
+#   0. guard-secrets -> fails if any signing secret file is present in the tree
+#   1. deploy-pages  -> publishes the static web app (www/) to GitHub Pages
+#   2. android       -> builds an unsigned Android debug APK
+#   3. ios           -> compiles the iOS app (simulator, no code-signing)
+#
+# NOTE: For the Pages job to run you must enable Pages in the repo settings:
+#   Settings -> Pages -> Source -> "GitHub Actions"
+#
+# Shipping to the App Store / Play Store requires adding signing secrets
+# (Apple certificates + Android keystore) and release-signed builds.
+
+name: Build & Deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------
+  # 0) Guard: fail if any signing secret file is present in the tree
+  # ---------------------------------------------------------------
+  guard-secrets:
+    name: Guard against signing secrets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Scan tree for signing secrets
+        run: |
+          BAD=$(find . -type f \
+            \( -name '*.jks' \
+               -o -name '*.keystore' \
+               -o -name '*.p12' \
+               -o -name '*.p8' \
+               -o -name '*.mobileprovision' \
+               -o -name 'signing.properties' \) \
+            -not -path './.git/*')
+          if [ -n "$BAD" ]; then
+            echo "::error::Signing secret file(s) found in the repo:"
+            echo "$BAD"
+            exit 1
+          fi
+          echo "OK: no signing secret files found."
+
+  # ---------------------------------------------------------------
+  # 1) Deploy the web app to GitHub Pages (hosted live URL)
+  # ---------------------------------------------------------------
+  deploy-pages:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      pages: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+      - name: Upload www as Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: moneywise-app/www
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+  # ---------------------------------------------------------------
+  # 2) Build the Android app (unsigned debug APK)
+  # ---------------------------------------------------------------
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install dependencies
+        working-directory: moneywise-app
+        run: npm install
+      - name: Add Android platform
+        working-directory: moneywise-app
+        run: npx cap add android
+      - name: Build debug APK
+        working-directory: moneywise-app/android
+        run: ./gradlew assembleDebug
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: moneywise-debug
+          path: moneywise-app/android/app/build/outputs/apk/debug/app-debug.apk
+
+  # ---------------------------------------------------------------
+  # 3) Build the iOS app (compile check, no code signing) — macOS
+  # ---------------------------------------------------------------
+  ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install dependencies
+        working-directory: moneywise-app
+        run: npm install
+      - name: Add iOS platform
+        working-directory: moneywise-app
+        run: npx cap add ios
+      - name: Sync web assets
+        working-directory: moneywise-app
+        run: npx cap sync ios
+      - name: Build (simulator, no code signing)
+        working-directory: moneywise-app/ios
+        run: xcodebuild -workspace App.xcworkspace -scheme App -configuration Debug -sdk iphonesimulator CODE_SIGNING_ALLOWED=NO build
