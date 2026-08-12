@@ -1,0 +1,40 @@
+# MoneyWise AI — iOS release lanes
+#
+# Requires a private "match" git repo with your distribution certificates
+# and provisioning profiles (MATCH_GIT_URL / MATCH_PASSWORD), and an
+# App Store Connect API key for upload (APP_STORE_CONNECT_API_*).
+#
+#   bundle exec fastlane release_ipa          -> build a signed .ipa
+#   bundle exec fastlane upload_to_testflight -> push an existing .ipa to TestFlight
+#   bundle exec fastlane release_ios          -> both (local convenience)
+
+default_platform(:ios)
+
+lane :release_ipa do
+  # Pull the right signing identity + provisioning profile from match
+  match(
+    type: "appstore",
+    readonly: true
+  )
+
+  # Build the archive and export a signed .ipa
+  gym(
+    scheme: "App",
+    clean: true,
+    output_directory: "build/ios",
+    output_name: "MoneyWise"
+  )
+end
+
+lane :upload_to_testflight do
+  pilot(
+    ipa: "build/ios/MoneyWise.ipa",
+    skip_waiting_for_build_processing: true
+  )
+end
+
+# Run both lanes back to back (equivalent to the old single `release_ios`)
+lane :release_ios do
+  release_ipa
+  upload_to_testflight
+end
