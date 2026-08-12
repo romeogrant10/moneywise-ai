@@ -1,0 +1,19 @@
+{
+  "appName": "MoneyWise AI",
+  "currentVersion": "1.0.0",
+  "minimumVersion": "1.0.0",
+  "releaseNotesUrl": "https://github.com/YOUR_ORG/moneywise-ai/releases",
+  "message": "A new version of MoneyWise AI is available — with the latest fixes and improvements.",
+  "downloads": [
+    {
+      "platform": "Android",
+      "label": "Get the APK",
+      "url": "https://github.com/YOUR_ORG/moneywise-ai/releases/latest"
+    },
+    {
+      "platform": "iOS",
+      "label": "Open App Store",
+      "url": "https://apps.apple.com/app/YOUR_APP_ID"
+    }
+  ]
+}
