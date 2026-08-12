@@ -1,0 +1,6 @@
+source "https://rubygems.org"
+
+gem "fastlane"
+
+# Optional: automatic code-signing via match
+gem "cocoapods"
