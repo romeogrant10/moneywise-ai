@@ -1,0 +1,180 @@
+# MoneyWise AI — signed release builds
+#
+# Triggered by:
+#   - pushing a version tag (e.g. v1.0.0)
+#   - manual "Run workflow" dispatch (Actions -> Release (signed) -> Run)
+#
+# Produces:
+#   bump-versions  -> on tag push, updates www/versions.json currentVersion from the tag and commits it
+#   android-release -> signed release APK + AAB (Play Store ready)
+#   ios-release     -> signed .ipa, uploaded to TestFlight
+#   release-github  -> one GitHub Release containing APK + AAB + .ipa
+#
+# REQUIRED SECRETS (repo Settings -> Secrets and variables -> Actions):
+#   Android:
+#     ANDROID_KEYSTORE_BASE64      base64 of your .jks release keystore
+#     ANDROID_KEYSTORE_PASSWORD    keystore store password
+#     ANDROID_KEY_ALIAS            keystore alias
+#     ANDROID_KEY_PASSWORD         alias password
+#   iOS (App Store Connect API key, for signing via match + upload via pilot):
+#     APP_STORE_CONNECT_API_ISSUER_ID   App Store Connect API key issuer ID
+#     APP_STORE_CONNECT_API_KEY_ID      App Store Connect API key ID
+#     APP_STORE_CONNECT_API_KEY         App Store Connect API key content (P8)
+#     MATCH_GIT_URL                     private git repo URL holding certs/profiles
+#     MATCH_PASSWORD                    passphrase protecting the match repo
+
+name: Release (signed)
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------
+  # 0) On tag push, bump versions.json currentVersion from the tag and
+  #    commit it to the default branch so the live manifest updates.
+  # ---------------------------------------------------------------
+  bump-versions:
+    name: Bump versions.json from tag
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      - name: Derive version from tag
+        id: ver
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - name: Update www/versions.json
+        run: |
+          node -e "const fs=require('fs');const p='moneywise-app/www/versions.json';const j=JSON.parse(fs.readFileSync(p,'utf8'));j.currentVersion=process.argv[1];j.minimumVersion=process.argv[1];fs.writeFileSync(p,JSON.stringify(j,null,2)+'\n');" "${{ steps.ver.outputs.version }}"
+          echo "currentVersion -> ${{ steps.ver.outputs.version }}"
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add moneywise-app/www/versions.json
+          if git diff --cached --quiet; then
+            echo "versions.json already up to date; nothing to commit."
+          else
+            git commit -m "chore: bump versions.json to v${{ steps.ver.outputs.version }}"
+            git push origin HEAD:${{ github.event.repository.default_branch }}
+          fi
+
+  # ---------------------------------------------------------------
+  # Android signed release
+  # ---------------------------------------------------------------
+  android-release:
+    name: Android release (AAB + APK)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install dependencies
+        working-directory: moneywise-app
+        run: npm install
+      - name: Add Android platform
+        working-directory: moneywise-app
+        run: npx cap add android
+      - name: Configure release signing
+        working-directory: moneywise-app/android
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > keystore.jks
+          printf 'storeFile=keystore.jks\nstorePassword=%s\nkeyAlias=%s\nkeyPassword=%s\n' \
+            "$ANDROID_KEYSTORE_PASSWORD" "$ANDROID_KEY_ALIAS" "$ANDROID_KEY_PASSWORD" \
+            > signing.properties
+      - name: Build signed release
+        working-directory: moneywise-app/android
+        run: ./gradlew assembleRelease bundleRelease
+      - name: Upload signed artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: moneywise-android-release
+          path: |
+            moneywise-app/android/app/build/outputs/apk/release/app-release.apk
+            moneywise-app/android/app/build/outputs/bundle/release/app-release.aab
+
+  # ---------------------------------------------------------------
+  # iOS signed release -> .ipa + TestFlight
+  # ---------------------------------------------------------------
+  ios-release:
+    name: iOS release (TestFlight)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install dependencies
+        working-directory: moneywise-app
+        run: npm install
+      - name: Add iOS platform
+        working-directory: moneywise-app
+        run: npx cap add ios
+      - name: Sync web assets
+        working-directory: moneywise-app
+        run: npx cap sync ios
+      - name: Install fastlane + gems
+        working-directory: moneywise-app
+        run: |
+          gem install bundler --no-document
+          bundle install
+      - name: Sign and build .ipa
+        working-directory: moneywise-app
+        env:
+          MATCH_GIT_URL: ${{ secrets.MATCH_GIT_URL }}
+          MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+        run: bundle exec fastlane release_ipa
+      - name: Upload .ipa artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-release
+          path: moneywise-app/build/ios/*.ipa
+      - name: Upload to TestFlight (best effort)
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        working-directory: moneywise-app
+        env:
+          APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_API_KEY: ${{ secrets.APP_STORE_CONNECT_API_KEY }}
+        run: bundle exec fastlane upload_to_testflight
+
+  # ---------------------------------------------------------------
+  # Publish a single GitHub Release with APK + AAB + .ipa
+  # ---------------------------------------------------------------
+  release-github:
+    name: Publish GitHub Release
+    needs: [android-release, ios-release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref }}
+          name: MoneyWise AI ${{ github.ref_name }}
+          generate_release_notes: true
+          files: artifacts/**/*
