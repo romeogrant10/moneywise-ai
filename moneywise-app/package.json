@@ -1,0 +1,27 @@
+{
+  "name": "moneywise-ai",
+  "version": "1.0.0",
+  "description": "MoneyWise AI — a personal AI financial coach. Mobile-first web app wrapped with Capacitor for iOS and Android, plus a Node coach API that calls an LLM with the key kept server-side.",
+  "private": true,
+  "scripts": {
+    "serve": "npx serve www",
+    "start": "node server.js",
+    "dev": "node server.js",
+    "add:ios": "npx cap add ios",
+    "add:android": "npx cap add android",
+    "sync": "npx cap sync",
+    "open:ios": "npx cap open ios",
+    "open:android": "npx cap open android"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.0.0",
+    "@capacitor/core": "^6.0.0",
+    "@capacitor/ios": "^6.0.0",
+    "@capacitor/android": "^6.0.0"
+  }
+}
